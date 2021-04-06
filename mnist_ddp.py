@@ -49,19 +49,21 @@ def train(args, model, device, train_loader, optimizer, epoch):
         target = target.cuda()
         
         optimizer.zero_grad()
-        output = model.module(data)
+        output = model(data)
         loss = F.nll_loss(output, target)
         loss.backward()
         optimizer.step()
+        if args.gpus > 1: 
+            [loss] = du.all_reduce([loss])
         
-        [loss] = du.all_reduce([loss])
-        lossMeter.add_value(loss.item())
-
+        if dist.get_rank() == 0:
+            lossMeter.add_value(loss.item())
 
         if batch_idx % args.log_interval == 0 and dist.get_rank()==0:
-            loss = lossMeter.get_win_median()
+            if args.gpus > 1:
+                loss = lossMeter.get_win_median()
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
+                epoch, batch_idx * len(data) * args.gpus, len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.item()))
             if args.dry_run:
                 break
@@ -70,17 +72,21 @@ def test(model, device, test_loader):
     model.eval()
     correct = 0
     with torch.no_grad():
-        for data, target in test_loader:
+        for batch_id, (data, target) in enumerate(test_loader):
             data, target = data.cuda(), target.cuda()
             output = model(data)
             
             pred = output.argmax(dim=1, keepdim=True)  # get the index of the max log-probability
-            print(pred.shape, target.shape)
-            print ("########################")
-            pred, target = du.all_gather([pred, target])
-            print(pred.shape, target.shape)
+            if args.gpus > 1 :
+                pred, target = du.all_gather([pred, target])
+            pred = pred.cpu()
+            target = target.cpu()
+            if dist.get_rank() == 0:
+                correct += pred.eq(target.view_as(pred)).sum().item()
+                print ("Test results: {}/{} {:.0f}% correct/all : {}/{}".\
+                    format(batch_id * len(pred), len(test_loader.dataset),\
+                    100.0*batch_id / len(test_loader), correct, len(pred)*batch_id))
 
-            correct += pred.eq(target.view_as(pred)).sum().item()
     if dist.get_rank() == 0:
         print('\nTest set: Accuracy: {}/{} ({:.0f}%)\n'.format(
          correct, len(test_loader.dataset),
@@ -121,6 +127,7 @@ def set_seed(seed):
     torch.cuda.manual_seed(seed)
 
 def main():
+    global args
     parser = build_parser()
     args = parser.parse_args()
     set_seed(args.seed)
@@ -157,14 +164,22 @@ def main():
                        transform=transform)
     #train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
     #test_loader = torch.utils.data.DataLoader(dataset2, **test_kwargs)
-    train_loader = Dataloader(dataset1, batch_size=args.batch_size, \
-                    shuffle=True, num_workers=4, pin_memory=True)
-    test_loader = Dataloader(dataset2, batch_size=args.test_batch_size, \
-                    shuffle=False, pin_memory=True)
 
+    def construct_sampler(dataset):
+        sampler = torch.utils.data.distributed.DistributedSampler(dataset) \
+                    if args.gpus > 1 else None
+        return sampler
 
+    train_loader = Dataloader(dataset1, batch_size=args.batch_size//max(args.gpus,1), \
+                shuffle=True, sampler=construct_sampler(dataset1), num_workers=4, \
+                pin_memory=True, drop_last=True)
+    test_loader = Dataloader(dataset2, batch_size=args.test_batch_size//max(args.gpus,1), \
+                shuffle=False, sampler=construct_sampler(dataset2), num_workers=4, pin_memory=True)
+   
     if dist.get_rank() == 0:
-        print ("Building model......")
+        print ("Total train examples: {} total test examples: {} \n".\
+            format(len(train_loader.dataset), len(test_loader.dataset)))
+        print ("Building model......\n")
     #model = Net().to(device)
     model = Net().cuda(device=cur_device)
     model = DDP(model, device_ids=[cur_device], output_device=cur_device)
