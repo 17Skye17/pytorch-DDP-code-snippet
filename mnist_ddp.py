@@ -165,16 +165,16 @@ def main():
     #train_loader = torch.utils.data.DataLoader(dataset1,**train_kwargs)
     #test_loader = torch.utils.data.DataLoader(dataset2, **test_kwargs)
 
-    def construct_sampler(dataset):
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset) \
+    def construct_sampler(dataset, shuffle):
+        sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=shuffle) \
                     if args.gpus > 1 else None
         return sampler
 
     train_loader = Dataloader(dataset1, batch_size=args.batch_size//max(args.gpus,1), \
-                shuffle=True, sampler=construct_sampler(dataset1), num_workers=4, \
+                shuffle=False, sampler=construct_sampler(dataset1, shuffle=True), num_workers=4, \
                 pin_memory=True, drop_last=True)
     test_loader = Dataloader(dataset2, batch_size=args.test_batch_size//max(args.gpus,1), \
-                shuffle=False, sampler=construct_sampler(dataset2), num_workers=4, pin_memory=True)
+                shuffle=False, sampler=construct_sampler(dataset2, shuffle=False), num_workers=4, pin_memory=True)
    
     if dist.get_rank() == 0:
         print ("Total train examples: {} total test examples: {} \n".\
