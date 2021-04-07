@@ -5,6 +5,8 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.distributed as dist
 import argparse
+import random
+import numpy as np
 
 from torch.utils.data import DataLoader as Dataloader 
 from utils.meters import ScalarMeter
@@ -122,15 +124,28 @@ def build_parser():
 
     return parser
 
-def set_seed(seed):    
+def set_seed(seed, cuda_deterministic=True):
+    random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    if cuda_deterministic:
+        torch.backends.cudnn.deterministic=True
+        torch.backends.cudnn.benchmark=False
+    else:
+        torch.backends.cudnn.deterministic=False
+        torch.backends.cudnn.benchmark=True
+
 
 def main():
     global args
     parser = build_parser()
     args = parser.parse_args()
-    set_seed(args.seed)
+
+    
+    rank = dist.get_rank()
+    set_seed(args.seed+rank)
     #use_cuda = not args.no_cuda and torch.cuda.is_available()
     
     ######### set distributed args for multi-gpus ############
