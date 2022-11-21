@@ -143,22 +143,28 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    
-    rank = dist.get_rank()
-    set_seed(args.seed+rank)
+
     #use_cuda = not args.no_cuda and torch.cuda.is_available()
     
     ######### set distributed args for multi-gpus ############
     local_rank = args.local_rank
 
+    torch.cuda.set_device(local_rank)
+    cur_device = torch.cuda.current_device()
+    
+    os.environ['MASTER_ADDR']='127.0.0.1'
+    os.environ['MASTER_PORT']='10086'
+
     dist.init_process_group(
         'nccl',
-        init_method='tcp://localhost:9118',
+        init_method='env://',
         rank=local_rank,
         world_size=args.gpus,
         )
-    torch.cuda.set_device(local_rank)
-    cur_device = torch.cuda.current_device()
+
+    rank = dist.get_rank()
+    set_seed(args.seed+rank)
+
 
     #train_kwargs = {'batch_size': args.batch_size}
     #test_kwargs = {'batch_size': args.test_batch_size}
